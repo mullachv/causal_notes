@@ -7,6 +7,7 @@ from scipy.stats import binom
 # M ~ 200 * N
 M = 5
 N = 2
+K = 2
 
 np.random.seed(40997)
 
@@ -59,23 +60,28 @@ print(snps, traits)
 
 from sklearn import decomposition
 from sklearn.preprocessing import StandardScaler
-#Logistic Factor Analysis
-def m_analysis(matr, k, which='PCA'):
-	'''
 
-	:param matr:
-	:param k:
-	:return: w, z such that w * z = matr
-	'''
-	matr = StandardScaler().fit_transform(matr)
-	if which == 'FA':
-		lfa = decomposition.FactorAnalysis()
-		return lfa.fit_transform(matr)
-	else:
-		pca = decomposition.PCA(n_components=k)
-		return pca.fit_transform(matr)
+#Factor Analyses
+def fas():
+	methods = {
+		'FA': decomposition.FactorAnalysis(),
+		'ICA': decomposition.FastICA(),
+		'LDA': decomposition.LatentDirichletAllocation(),
+		'PCA': decomposition.PCA(n_components=K),
+		'NMF': decomposition.NMF(),
+		#'RPCA': decomposition.RandomizedPCA(n_components=K)
+	 }
 
-	return factors
+	def m_analysis(matr, which='RPCA'):
+		'''
+		Factorize as specified
+		:param matr:
+		:return: w, z such that w * z = matr
+		'''
+		matr = StandardScaler().fit_transform(matr)
+		return methods[which].fit_transform(matr)
 
-print(m_analysis(snps, 3))
-print(m_analysis(snps, 3, 'FA'))
+	print(m_analysis(snps, 'FA'))
+	print(m_analysis(snps, 'PCA'))
+
+fas()
