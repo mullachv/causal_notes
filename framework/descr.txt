@@ -1,0 +1,4 @@
+synthetic.h5: data0_0
+synthetic.h5: data0_1
+synthetic.h5: data1_0
+synthetic.h5: data1_1
