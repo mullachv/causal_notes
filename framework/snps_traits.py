@@ -22,27 +22,29 @@ def gen_snps_traits(M, N, S):
 	vars_coeff_ind, vars_coeff = 0, None
 
 	# What fraction of M's contribute to y_n
-	CMP_FACTOR = S
+	# Probability is compressed
+	prob_compression_factor = S
 
 	def coeffs():
 		nonlocal vars_coeff_ind, vars_coeff
 		if vars_coeff_ind == 0:
 			vars_coeff_ind = 1
-			a = binom.rvs(1, [CMP_FACTOR]*pi_nm.shape[1])
+			a = binom.rvs(1, [prob_compression_factor]*pi_nm.shape[1])
 			b = np.random.randn(pi_nm.shape[1])
 			vars_coeff = a * b
 
 		return vars_coeff
 
-	#Linear combination trait generator
+	# Linear combination trait generator
 	def lin_traits(pi_nm, co):
 		return np.dot(pi_nm, co)
 
+	# Quadratic combination trait generator
 	def quad_traits(pi_nm, co):
 		a = np.diag(np.random.randn(M))
 		return np.dot(np.dot(np.dot(pi_nm, a), a.T),co)
 
-	return snps, lin_traits(pi_nm, coeffs())
+	return snps, lin_traits(pi_nm, coeffs()), pi_nm
 
 # snps, traits = gen_snps_traits()
 # print(snps, traits)
@@ -106,9 +108,14 @@ def create_data(data_type='small'):
 				individuals, snip_size = int(snip_size//inv_sparse_factor), int(snip_size)
 				if individuals == 0:
 					continue
-				snips, traits = gen_snps_traits(snip_size, individuals, 1./inv_sparse_factor)
+				snips, traits, logits = gen_snps_traits(snip_size, individuals, 1./inv_sparse_factor)
 				df = convert_to_df(snips, traits)
 				key_value = ('data'+str(i)+'_'+str(j))
+				df.to_hdf(hdf_file, key=key_value, mode='a')
+
+				#logits
+				df = convert_to_df(logits, traits)
+				key_value = ('logits' + str(i) + '_' + str(j))
 				df.to_hdf(hdf_file, key=key_value, mode='a')
 	return
 
@@ -120,15 +127,21 @@ def read_data(data_type='small'):
 	if not (hdf_file_path.is_file()): # .h5 file does not exist
 		raise Exception("H5 file does not exist: " + hdf_file_path)
 	hf = pd.HDFStore(hdf_fname, mode='r')
-	df = pd.read_hdf(hdf_file_path, key=hf.keys()[-1], mode='r')
+	data_keys = hf.keys()
+	data_keys.sort()
+	read_key = list(filter(lambda x: x.startswith('/data'), data_keys))[-1]
+	df = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
 
 	nrows, ncols = df.shape
-	# print(nrows, ncols)
 	all = random.sample(range(nrows), nrows)
 	train_ix, test_ix  = all[:int(0.8*nrows)], all[int(0.8*nrows):]
 
+	read_key = list(filter(lambda x: x.startswith('/logits'), data_keys))[-1]
+	dl = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
+
 	# train, test (x_train, y_train, x_test, y_test)
-	return df.ix[train_ix, :ncols-1], df.ix[train_ix, ncols-1], df.ix[test_ix, :ncols-1], df.ix[test_ix, ncols-1]
+	return df.ix[train_ix, :ncols-1], df.ix[train_ix, ncols-1], dl.ix[train_ix, :ncols-1],\
+			df.ix[test_ix, :ncols-1], df.ix[test_ix, ncols-1], dl.ix[test_ix, ncols-1]
 
 import os
 def load_data(data_type='small'):
@@ -153,7 +166,10 @@ if __name__ == '__main__':
 	#parser.add_argument('-R', '--relationship', help="Relationship b/w SNPs and traits", default='linear')
 
 	args = parser.parse_args()
-	(trainx, trainy, testx, testy) = load_data(args.data_type)
+	(trainx, trainy, trainl, testx, testy, testl) = load_data(args.data_type)
 	print(trainy, testy)
-	print(trainx, testx)
+	# print(len(trainy), len(testy))
+	# print(trainx, testx)
+	# #logits
+	# print(trainl, testl)
 
