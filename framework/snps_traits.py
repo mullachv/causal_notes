@@ -1,147 +1,173 @@
 import numpy as np
 from scipy.stats import binom
+from scipy.stats import ortho_group
+from scipy.special import expit
 
 # Generate Synthetic SNPs and Traits
-def gen_snps_traits(M, N, S):
+def gen_snps_traits(N, M, S):
+	"""
+	:param N: Number of observations (individuals), ranges in 100s to 10K
+	:param M: Number of SNPs, ranges in 100K to 1M
+	:param S: Sparsity factor (0,1]
+	:return: tuple of confounder (Z), Prior (W), SNPs, Traits,
 	"""
 
-	:param M: Number of SNPs, ranges in 100K to 1M
-	:param N: Number of observations (individuals), ranges in 100s to 10K
-	:param S: Sparsity factor (0,1]
-	:return: tuple of SNPs and Traits
-	"""
-	def gen_pi_nm():
-		return np.random.rand(N, M)
+	def linear_combine(z, w):
+		pi = np.dot(z, w.T)
+
+		# Turn into a probability (sigmoid)
+		return expit(pi)
+
+	def gen_zwpi():
+		#z = ortho_group.rvs(dim=N)
+		k = int(M*S)
+		z = np.random.randn(N, k)
+		w = np.random.randn(M, k)
+		pi = linear_combine(z, w)
+		return z, w, pi
 
 	def gen_xnm(pi_nm):
 		return binom.rvs(2, pi_nm)
 
-	pi_nm = gen_pi_nm()
-	snps = gen_xnm(pi_nm)
+	def gen_traits(pi_nm, S='0.3'):
+		q = int(pi_nm.shape[1] * (1.- S))
+		zero_indexes = np.random.choice(pi_nm.shape[1], q)
+		factor = np.random.randn(pi_nm.shape[1])
+		for i in zero_indexes:
+			factor[i] = 0.
+		return np.dot(pi_nm, factor)
 
-	vars_coeff_ind, vars_coeff = 0, None
-
-	# What fraction of M's contribute to y_n
-	# Probability is compressed
-	prob_compression_factor = S
-
-	def coeffs():
-		nonlocal vars_coeff_ind, vars_coeff
-		if vars_coeff_ind == 0:
-			vars_coeff_ind = 1
-			a = binom.rvs(1, [prob_compression_factor]*pi_nm.shape[1])
-			b = np.random.randn(pi_nm.shape[1])
-			vars_coeff = a * b
-
-		return vars_coeff
-
-	# Linear combination trait generator
-	def lin_traits(pi_nm, co):
-		return np.dot(pi_nm, co)
-
-	# Quadratic combination trait generator
-	def quad_traits(pi_nm, co):
-		a = np.diag(np.random.randn(M))
-		return np.dot(np.dot(np.dot(pi_nm, a), a.T),co)
-
-	return snps, lin_traits(pi_nm, coeffs()), pi_nm
-
-# snps, traits = gen_snps_traits()
-# print(snps, traits)
+	z, w, probs = gen_zwpi()
+	snps = gen_xnm(probs)
+	return z, w, snps, gen_traits(probs, S), probs
 
 import pandas as pd
-def convert_to_df(snps, traits):
+def convert_snps_traits2df(snps, traits):
 	individual_names = [('IND_' + str(x + 1)) for x in range(snps.shape[0])]
 	df = pd.DataFrame(index=individual_names)
 	for i in range(snps.shape[1]):
-		ds = pd.Series(snps[:,i], index=individual_names, name=('SNP_'+str(i)))
+		ds = pd.Series(snps[:, i], index=individual_names, name=('SNP_' + str(i + 1)))
 		df = df.join(ds)
 	df = df.join(pd.Series(traits, index=individual_names, name='Traits'))
 	return df
 
+def array2df(data, row_pre='IND_', col_pre='Z_'):
+	individual_names = [(row_pre + str(x + 1)) for x in range(data.shape[0])]
+	df = pd.DataFrame(index=individual_names)
+	for i in range(data.shape[1]):
+		ds = pd.Series(data[:, i], index=individual_names, name=(col_pre + str(i + 1)))
+		df = df.join(ds)
+	return df
 
 data_type_params = {
 	'small': {
-		'logspace_snip_lo': 2,
-		'logspace_snip_hi': 3,
-		'num_snip_sets': 2,
-		'linspace_inv_sparse_lo': 1,
-		'linspace_inv_sparse_hi': 3,
-		'num_sparse_sets': 3,
+		'num_snips': 10**3,
+		'num_individuals': 10,
+		'inverse_sparsity': 40,
 	},
 	'medium': {
-		'logspace_snip_lo': 3,
-		'logspace_snip_hi': 4,
-		'num_snip_sets': 2,
-		'linspace_inv_sparse_lo': 10,
-		'linspace_inv_sparse_hi': 70,
-		'num_sparse_sets': 3,
+		'num_snips': 10**4,
+		'num_individuals': 100,
+		'inverse_sparsity': 60,
 	},
 	'large': {
-		'logspace_snip_lo': 5,
-		'logspace_snip_hi': 6,
-		'num_snip_sets': 2,
-		'linspace_inv_sparse_lo': 100,
-		'linspace_inv_sparse_hi': 500,
-		'num_sparse_sets': 3,
-	}
-
+		'num_snips': 10**5,
+		'num_individuals': 5000,
+		'inverse_sparsity': 300,
+	},
 }
-data_folder='SNPS_TRAITS_data'
-
+data_folder = 'SNPS_TRAITS_data'
 from pathlib import Path
-def create_data(data_type='small'):
+def write_data(z, w, snips, traits, probs, j, hdf_file):
+	df = convert_snps_traits2df(snips, traits)
+	key_value = ('data' + '_' + str(j))
+	df.to_hdf(hdf_file, key=key_value, mode='a')
+
+	# logits
+	logits = np.log(probs / (1. - probs))
+	df = convert_snps_traits2df(logits, traits)
+	key_value = ('/logits' + '_' + str(j))
+	df.to_hdf(hdf_file, key=key_value, mode='a')
+
+	# z
+	df = array2df(z, row_pre='IND_', col_pre='Z_')
+	key_value = ('/z' + '_' + str(j))
+	df.to_hdf(hdf_file, key=key_value, mode='a')
+
+	# w
+	df = array2df(w, row_pre='AL_', col_pre='IND_')
+	key_value = ('/w' + '_' + str(j))
+	df.to_hdf(hdf_file, key=key_value, mode='a')
+
+NUM_SETS = 3
+def create_simple_data(data_type='small'):
 	# create data, if not exist
 	hdf_name = data_type + '.h5'
 	hdf_file = Path(os.path.join(data_folder, hdf_name))
-	if not (hdf_file.is_file()): # .h5 file does not exist
-		for i, snip_size in enumerate(np.logspace(
-				data_type_params[data_type]['logspace_snip_lo'],
-				data_type_params[data_type]['logspace_snip_hi'],
-				num=data_type_params[data_type]['num_snip_sets'])
-		):
-			for j, inv_sparse_factor in enumerate(np.linspace(
-					data_type_params[data_type]['linspace_inv_sparse_lo'],
-					data_type_params[data_type]['linspace_inv_sparse_hi'],
-					num=data_type_params[data_type]['num_sparse_sets'])
-			): # sparsity = 1./inv_sparse_factor
-				individuals, snip_size = int(snip_size//inv_sparse_factor), int(snip_size)
-				if individuals == 0:
-					continue
-				snips, traits, logits = gen_snps_traits(snip_size, individuals, 1./inv_sparse_factor)
-				df = convert_to_df(snips, traits)
-				key_value = ('data'+str(i)+'_'+str(j))
-				df.to_hdf(hdf_file, key=key_value, mode='a')
+	if not (hdf_file.is_file()):  # .h5 file does not exist
+		j, snip_size, individuals, inv_sparse_factor \
+			= 0, \
+				data_type_params[data_type]['num_snips'], \
+				data_type_params[data_type]['num_individuals'], \
+				data_type_params[data_type]['inverse_sparsity']
 
-				#logits
-				df = convert_to_df(logits, traits)
-				key_value = ('logits' + str(i) + '_' + str(j))
-				df.to_hdf(hdf_file, key=key_value, mode='a')
+		if individuals == 0:
+			return
+
+		while j < NUM_SETS:
+			# sparsity = 1./inv_sparse_factor
+			z, w, snips, traits, probs = gen_snps_traits( individuals, snip_size, 1. / inv_sparse_factor)
+			# print('w.shape: {}'.format(w.shape))
+			write_data(z, w, snips, traits, probs, j, hdf_file)
+			j += 1
+
 	return
 
-import random
+def get_entry_key(hdf_keys, data_indicator, train_test='train'):
+	c = 0 if train_test == 'train' else -1
+	return list(filter(lambda x: x.startswith('/' + data_indicator), hdf_keys))[c]
+
 def read_data(data_type='small'):
 	hdf_name = data_type + '.h5'
 	hdf_fname = os.path.join(data_folder, hdf_name)
 	hdf_file_path = Path(hdf_fname)
-	if not (hdf_file_path.is_file()): # .h5 file does not exist
+	if not (hdf_file_path.is_file()):  # .h5 file does not exist
 		raise Exception("H5 file does not exist: " + hdf_file_path)
 	hf = pd.HDFStore(hdf_fname, mode='r')
 	data_keys = hf.keys()
 	data_keys.sort()
-	read_key = list(filter(lambda x: x.startswith('/data'), data_keys))[-1]
-	df = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
 
-	nrows, ncols = df.shape
-	all = random.sample(range(nrows), nrows)
-	train_ix, test_ix  = all[:int(0.8*nrows)], all[int(0.8*nrows):]
+	acc = []
 
-	read_key = list(filter(lambda x: x.startswith('/logits'), data_keys))[-1]
-	dl = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
+	for text in ['train', 'test']:
+		read_key = get_entry_key(data_keys, 'data', text)
+		df = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
+		_, ncols = df.shape
 
-	# train, test (x_train, y_train, x_test, y_test)
-	return df.ix[train_ix, :ncols-1], df.ix[train_ix, ncols-1], dl.ix[train_ix, :ncols-1],\
-			df.ix[test_ix, :ncols-1], df.ix[test_ix, ncols-1], dl.ix[test_ix, ncols-1]
+		read_key = get_entry_key(data_keys, 'logits', text)
+		dl = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
+
+		read_key = get_entry_key(data_keys, 'z', text)
+		dz = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
+
+		read_key = get_entry_key(data_keys, 'w', text)
+		dw = pd.read_hdf(hdf_file_path, key=read_key, mode='r')
+
+		acc += df.ix[:, :ncols - 1],
+		acc += df.ix[:, ncols - 1],
+		acc += dl.ix[:, :ncols - 1],
+		acc += dz.ix[:],
+		acc += dw.ix[:],
+
+	# train, test
+	# (x_train, y_train, l_train, z_train, w_train, x_test, y_test, l_test, z_test, w_test)
+	return acc
+
+
+import numpy as np
+def make_batch(data_frame):
+	sh = [-1] + [x for x in data_frame.shape]
+	return np.reshape(data_frame.values, sh)
 
 import os
 def load_data(data_type='small'):
@@ -149,27 +175,35 @@ def load_data(data_type='small'):
 	# Make dir, if not exist
 	os.makedirs(data_folder, exist_ok=True)
 
-	#data_types = ['small', 'medium', 'large']
-	create_data(data_type)
+	# data_types = ['small', 'medium', 'large']
+	create_simple_data(data_type)
 
 	# Load data into a pd
-	return read_data(data_type)
+	x, y, l, z, w, sx, sy, sl, sz, sw = read_data(data_type)
+	return make_batch(x), \
+			make_batch(y), \
+			make_batch(l), \
+			make_batch(z), \
+			make_batch(w), \
+			make_batch(sx), \
+			make_batch(sy), \
+			make_batch(sl), \
+			make_batch(sz),	\
+			make_batch(sw)
 
 import argparse
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
-	parser.add_argument('-D', "--data_type", help="small, medium or large", choices=['small', 'medium', 'large'], default='small', action='store')
-	#parser.add_argument('-A', "--all", help="Generate all prebuilt synthetic datasets", default=True, action='store_true')
-	#parser.add_argument('-M', "--snip_size", help="Number of genomic SNPs", default=30000)
-	#parser.add_argument('-N', '--observations', help="Number of genomic observations", default=100)
-	#parser.add_argument('-S', '--sparsity', help="Sparsity", default=0.3)
-	#parser.add_argument('-R', '--relationship', help="Relationship b/w SNPs and traits", default='linear')
+	parser.add_argument('-D', "--data_type", help="small, medium or large", choices=['small', 'medium', 'large'],
+						default='small', action='store')
+	# parser.add_argument('-A', "--all", help="Generate all prebuilt synthetic datasets", default=True, action='store_true')
+	# parser.add_argument('-M', "--snip_size", help="Number of genomic SNPs", default=30000)
+	# parser.add_argument('-N', '--observations', help="Number of genomic observations", default=100)
+	# parser.add_argument('-S', '--sparsity', help="Sparsity", default=0.3)
+	# parser.add_argument('-R', '--relationship', help="Relationship b/w SNPs and traits", default='linear')
 
 	args = parser.parse_args()
-	(trainx, trainy, trainl, testx, testy, testl) = load_data(args.data_type)
-	print(trainy, testy)
-	# print(len(trainy), len(testy))
-	# print(trainx, testx)
-	# #logits
-	# print(trainl, testl)
-
+	(trainx, trainy, trainl, trainz, trainw, testx, testy, testl, testz, testw) = load_data(args.data_type)
+	print(trainy.shape, testy.shape)
+	print(trainl.shape, testl.shape)
+	print(trainz.shape, trainw.shape)

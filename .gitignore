@@ -1,0 +1,6 @@
+**/tfb_logs/*
+**/*.png
+**/__pycache__/*
+**/.idea/*
+**.h5
+

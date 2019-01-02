@@ -24,7 +24,7 @@ import input_data
 mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
 n_samples = mnist.train.num_examples
 
-logdir = f"./tfb_logs/"
+logdir = "./tfb_logs/"
 tf.logging.set_verbosity(tf.logging.ERROR)
 
 def xavier_init(fan_in, fan_out, constant=1):
