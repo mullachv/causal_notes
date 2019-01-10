@@ -115,6 +115,7 @@ plot_model(encoder, to_file='vae_mlp_encoder.png', show_shapes=True)
 latent_inputs = Input(shape=(latent_dim,), name='z_sampling')
 x = Dense(intermediate_dim,activation='relu')(latent_inputs)
 outputs = Dense(original_dim, activation='sigmoid')(x)
+print(outputs.shape)
 
 # instantiate decoder model
 decoder = Model(latent_inputs, outputs, name='decoder')
@@ -123,6 +124,7 @@ plot_model(decoder, to_file='vae_mlp_decoder.png', show_shapes=True)
 
 # instantiate VAE model
 outputs = decoder(encoder(inputs)[2])
+print(outputs.shape)
 vae = Model(inputs, outputs,name='vae_mlp')
 
 if __name__ == '__main__':
@@ -161,6 +163,11 @@ if __name__ == '__main__':
 	vae.add_loss(vae_loss)
 	vae.compile(optimizer='adam')
 	vae.summary()
+
+	print('reconstr_loss shape: {}'.format(reconstruction_loss.shape))
+	print('kl_loss shape: {}'.format(kl_loss.shape))
+	print('vae_loss shape: {}'.format(vae_loss.shape))
+
 
 	plot_model(vae, to_file='vae_mlp.png',show_shapes=True)
 

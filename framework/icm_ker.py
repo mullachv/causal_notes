@@ -11,7 +11,6 @@ from keras.callbacks import TensorBoard
 #
 
 def create_network(N, M, K):
-
 	z = Input(shape=(N, K), name='z')
 	w = Input(shape=(M, K), name='w')
 	x = Input(shape=(N, M), name='x')
