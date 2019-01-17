@@ -1,6 +1,6 @@
 from keras import backend
 from keras.utils import plot_model
-from keras.layers import Lambda, Dense, Input, Reshape, Embedding
+from keras.layers import Lambda, Dense, Input, Dropout, Embedding, Flatten
 from keras.models import Model
 from keras.callbacks import TensorBoard
 from keras.losses import mse
@@ -9,28 +9,28 @@ import keras.metrics as metrics
 import argparse
 import numpy as np
 
-from synthetic_data import load_training_data
+from synthetic_data import load_training_data, load_validation_data, load_test_data
 
-N = 1000 # individuals
+N = 100 # individuals
 M = 10000 # SNPs
 # K = Kc + Kd -- Observed data dimension
 Kc = 40
 Kd = 10
 H = 10 # Latent dimension
+NUM_DISC_CLASSES = 3
+dropout_rate = 0.3
 
 def reshape_rebatch(x, o, y):
-	r = x.shape[2] # M
-	assert len(x.shape) == 3 # Batch=1, N, M
-	x = x.swapaxes(0,2) # Batch=M, N, 1
+	assert len(x.shape) == 3
+	x = np.squeeze(x, axis=0) # Batch, M
 
-	assert len(o.shape) == 3 # 1, N, K=50
-	o = np.repeat(o, r, axis=0) # M, N, K
+	assert len(o.shape) == 3
+	o = np.squeeze(o, axis=0) # Batch, K
 
-	assert len(y.shape) == 3 # 1, N, 1
-	y = np.tile(y, r)
-	y = y.swapaxes(0, 2) # Batch=M, N, 1
+	assert len(y.shape) == 3
+	y = np.squeeze(y, axis=0) # Batch, 1
 
-	# We have M batches of data
+	# We have N batches of data
 	return x, o, y
 
 #
@@ -42,66 +42,82 @@ def sampling(args):
 	z_mean, z_log_var = args
 	batch = backend.shape(z_mean)[0]
 	dim1 = backend.int_shape(z_mean)[1]
-	dim2 = backend.int_shape(z_mean)[2]
-	epsilon = backend.random_normal(shape=(batch, dim1, dim2))
+	epsilon = backend.random_normal(shape=(batch, dim1))
 	return z_mean + backend.exp(0.5 * z_log_var)*epsilon
 
 # Read Train and reshape
 # x = Alleles, y = traits, pi = probs, o = observations
 #
-train_x, train_pi, train_y, train_o = load_training_data()
-train_x, train_o, train_y = reshape_rebatch(train_x, train_o, train_y)
+tx, _, ty, to = load_training_data()
+vx, _, vy, vo = load_validation_data()
+tx, to, ty = reshape_rebatch(tx, to, ty)
+vx, vo, vy = reshape_rebatch(vx, vo, vy)
 
 
 # Parameters
-num_discrete_classes = 3
-# x = Input(shape=(N, num_discrete_classes), name='x_as_categorical')
-x = Input(shape=(N, 1,), name='x_as_categorical')
-oc = Input(shape=(N, Kc,), name='o_continuous')
-od = Input(shape=(N, num_discrete_classes * Kd,), name='o_discrete') # one for each discrete o, Kd
-y = Input(shape=(N, 1,), name='y') # traits, continuous
+x = Input(shape=(M,), name='x_as_categorical')
+oc = Input(shape=(Kc,), name='o_continuous')
+od = Input(shape=(Kd,), name='o_discrete') # one for each discrete o, Kd
+y = Input(shape=(1,), name='y') # traits, continuous
 
-##### Encoder ######
-interim = Dense(512, activation='relu')(x)
+### Encoder ###
+# input x
+# Embedding [0,1,2] - 3 classes of input. Output 2D vector
+interim = Embedding(NUM_DISC_CLASSES, 2, input_length=M)(x) #output of batch, M, 2
 interim = Dense(512, activation='relu')(interim)
+interim = Dropout(dropout_rate)(interim)
 interim = Dense(256, activation='relu')(interim)
-z = Dense(50)(interim) # ?, N, 50
+interim = Flatten()(interim)
+z1 = Dense(50)(interim) # ?, 50
 
-# interim = Lambda(lambda x: backend.concatenate([x[0], x[1]], axis=2))([oc, od])
+# input oc
 interim = Dense(512, activation='relu')(oc)
-interim = Dense(512, activation='relu')(interim)
+interim = Dropout(dropout_rate)(interim)
 interim = Dense(256, activation='relu')(interim)
-z_ = Dense(50)(interim) # ?, N, 50
+z2 = Dense(50)(interim) # ?, 50
 
-#
-latent_dim = 10
-interim = Lambda(lambda x: backend.concatenate([x[0], x[1]], axis=2))([z, z_]) # ?, N, 100
+# input od
+# Embedding 3 classes of input. Output 2D vector
+interim = Embedding(NUM_DISC_CLASSES, 2, input_length=Kd)(od) #output of batch, Kd, 2
 interim = Dense(512, activation='relu')(interim)
+interim = Dropout(dropout_rate)(interim)
 interim = Dense(256, activation='relu')(interim)
-u_mean = Dense(latent_dim, name='u_mean')(interim) # ?, N, 10
-u_log_var = Dense(latent_dim, name='u_log_var')(interim) # ?, N, 10
+interim = Flatten()(interim)
+z3 = Dense(50)(interim) # ?, 50
+
+# input [z1 z2 z3]
+latent_dim = 10
+interim = Lambda(lambda x: backend.concatenate([x[0], x[1], x[2]], axis=1))([z1, z2, z3]) # ?, 150
+interim = Dense(512, activation='relu')(interim)
+interim = Dropout(dropout_rate)(interim)
+interim = Dense(256, activation='relu')(interim)
+u_mean = Dense(latent_dim, name='u_mean')(interim) # ?, 10
+u_log_var = Dense(latent_dim, name='u_log_var')(interim) # ?, 10
 
 # Sample
-u = Lambda(sampling, output_shape=(N,latent_dim,))([u_mean, u_log_var])
+u = Lambda(sampling, output_shape=(latent_dim,))([u_mean, u_log_var])
+print(u.shape)
 
 # Encoder Model
-encoder = Model([x, oc], [u_mean, u_log_var, u], name='encoder')
+encoder = Model([x, oc, od], [u_mean, u_log_var, u], name='encoder')
 encoder.summary()
 plot_model(encoder, to_file='cmed_encoder.png', show_shapes=True)
 
-####### Decoder #####
-latent_inputs = Input(shape=(N, latent_dim,), name='u_sampling')
+### Decoder ###
+latent_inputs = Input(shape=(latent_dim,), name='u_sampling')
 interim = Dense(512,activation='relu')(latent_inputs)
+interim = Dropout(dropout_rate)(interim)
 interim = Dense(256,activation='relu')(interim)
 outputs = Dense(1)(interim)
+print(outputs.shape)
 
 # instantiate decoder model
 decoder = Model(latent_inputs, outputs, name='decoder')
 decoder.summary()
 plot_model(decoder, to_file='cmed_decoder.png', show_shapes=True)
 
-inputs = [x, oc]
-outputs = decoder(encoder(inputs)[2])
+inputs = [x, oc, od]
+outputs = decoder(encoder(inputs)[2]) # decoder input is u from [u_mean, u_log_var, u], so index 2
 cmed_vae = Model(inputs, outputs, name='vae_cmed')
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
@@ -123,7 +139,7 @@ if __name__ == '__main__':
 
 		return vae_loss
 
-	cmed_vae.compile(optimizer='adam', loss=my_vae_loss)
+	cmed_vae.compile(optimizer='adam', loss=my_vae_loss, metrics=['accuracy'])
 	cmed_vae.summary()
 
 	plot_model(cmed_vae, to_file='cmed_mlp.png', show_shapes=True)
@@ -132,6 +148,10 @@ if __name__ == '__main__':
 		cmed_vae.load_weights(args.weights)
 	else:
 		# train
-		cmed_vae.fit(x=[train_x, train_o[:,:,:Kc]], y=train_y, epochs=3, batch_size=32,
-					 validation_data=(train_x, None))
+		cmed_vae.fit(x=[tx, to[:, :Kc], to[:, Kc:]],
+					 y=ty,
+					 epochs=3,
+					 batch_size=10,
+					 validation_data=([vx, vo[:, :Kc], vo[:, Kc:]], vy)
+					 )
 		cmed_vae.save_weights('cmed_syn_model.h5')

@@ -40,7 +40,7 @@ def plot_results(models, data, batch_size=128, model_name='vae_mnist'):
 	plt.figure(figsize=(12,10))
 	plt.scatter(z_mean[:,0], z_mean[:,1], c=y_test)
 	plt.colorbar()
-	plt.xlabel("z[0}")
+	plt.xlabel("z[0]")
 	plt.ylabel("z[1]")
 	plt.savefig(filename)
 	plt.show()
