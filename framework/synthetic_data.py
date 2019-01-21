@@ -118,8 +118,13 @@ data_filename=os.path.join(data_folder + '/simulation.h5')
 def store_data(df, data_key, **kwargs):
 	os.makedirs(data_folder, exist_ok=True)
 	store = pd.HDFStore(data_filename, mode='a')
-	store.put(data_key, df)
-	#store.get_storer(data_key).attrs.metadata = kwargs
+	store.put(data_key, df, format='fixed', data_columns=True)
+	#
+	# table format is required for batch generator (chunked reading)
+	# however, writing fails in that mode
+	# 
+	#
+	store.put(data_key, df, format='table', data_columns=True)
 	store.close
 
 def _int_load_data(data_key='/trn_data_1000x1000__x_nm'):
@@ -135,7 +140,30 @@ def make_batch(data_frame):
 	sh = [-1] + [x for x in data_frame.shape]
 	return np.reshape(data_frame.values, sh)
 
-def load_data(data_key_pre=None, dt='/tr'):
+Kc = 40
+#
+# https://stackoverflow.com/questions/20111542/selecting-rows-from-an-hdfstore-given-list-of-indexes
+#
+def batch_generator(batch_size=128, data_key_pre=None, dt='/trn'):
+	with pd.HDFStore(data_filename) as store:
+		if dt not in ['/trn', '/val', '/tst']:
+			raise Exception("Invalid data type: {}. Must be one of '/trn', '/val', or '/tst'".format(dt))
+		if data_key_pre is None or data_key_pre == '':
+			pre = [u for u in store.keys() if u.startswith(dt)][0]
+			data_key_pre = pre[:pre.find('__')]
+
+		while True:
+			nrows = store.get_storer(data_key_pre + '__o_k').shape[0]
+			indices = np.random.randint(nrows, size=batch_size)
+			o = store.select(key=data_key_pre + '__o_k', where='index in indices', chunksize=batch_size)
+			y = store.select(key=data_key_pre + '__y_n', where='index in indices', chunksize=batch_size)
+			pi = store.select(key=data_key_pre + '__pi_nm', where='index in indices', chunksize=batch_size)
+			x = store.select(key=data_key_pre + '__x_nm', where='index in indices', chunksize=batch_size)
+			x, pi, y, o = make_batch(x), make_batch(pi), make_batch(y), make_batch(o)
+			yield [x, o], y
+
+
+def load_data(data_key_pre=None, dt='/trn'):
 	'''
 	:param data_key_pre: 'data_1000x1000__'
 	:return: x, pi, y, o data as a tuple of each of one batch
@@ -213,6 +241,9 @@ if __name__ == '__main__':
 	x, pi, y, o = load_training_data()
 	x, pi, y, o = load_validation_data()
 	x, pi, y, o = load_test_data()
+
+	# x, pi, y, o = batch_generator(10)
+	# print(x)
 
 #  x_nm:
 # 	[[1 1 2 2 0]

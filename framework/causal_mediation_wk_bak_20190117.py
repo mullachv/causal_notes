@@ -13,8 +13,7 @@ import keras.metrics as metrics
 import argparse
 import numpy as np
 
-# from synthetic_data import load_training_data, load_validation_data, load_test_data, batch_generator
-from synthetic_data import load_training_data, load_validation_data, load_test_data, batch_generator
+from synthetic_data import load_training_data, load_validation_data, load_test_data
 
 N = 100 # individuals
 M = 10000 # SNPs
@@ -38,14 +37,6 @@ def reshape_rebatch(x, o, y):
 	# We have N batches of data
 	return x, o, y
 
-# Read Train and reshape
-# x = Alleles, y = traits, pi = probs, o = observations
-#
-tx, _, ty, to = load_training_data()
-vx, _, vy, vo = load_validation_data()
-tx, to, ty = reshape_rebatch(tx, to, ty)
-vx, vo, vy = reshape_rebatch(vx, vo, vy)
-
 #
 # Reparameterization trick
 # z = z_mean + var * epsilon
@@ -57,6 +48,14 @@ def sampling(args):
 	dim1 = backend.int_shape(z_mean)[1]
 	epsilon = backend.random_normal(shape=(batch, dim1))
 	return z_mean + backend.exp(0.5 * z_log_var)*epsilon
+
+# Read Train and reshape
+# x = Alleles, y = traits, pi = probs, o = observations
+#
+tx, _, ty, to = load_training_data()
+vx, _, vy, vo = load_validation_data()
+tx, to, ty = reshape_rebatch(tx, to, ty)
+vx, vo, vy = reshape_rebatch(vx, vo, vy)
 
 
 # Parameters
@@ -153,18 +152,14 @@ if __name__ == '__main__':
 		cmed_vae.load_weights(args.weights)
 	else:
 		# train
-		# cmed_vae.fit(x=[tx, to[:, :Kc], to[:, Kc:]],
-		# 			 y=ty,
-		# 			 epochs=3,
-		# 			 batch_size=10,
-		# 			 validation_data=([vx, vo[:, :Kc], vo[:, Kc:]], vy)
-		# 			 )
-		cmed_vae.fit_generator(
-			batch_generator(10),
-			x=[tx, to[:, :Kc], to[:, Kc:]],
+		cmed_vae.fit(x=[tx, to[:, :Kc], to[:, Kc:]],
 					 y=ty,
 					 epochs=3,
 					 batch_size=10,
 					 validation_data=([vx, vo[:, :Kc], vo[:, Kc:]], vy)
 					 )
 		cmed_vae.save_weights('cmed_syn_model.h5')
+
+
+def batch_generator():
+	pass
